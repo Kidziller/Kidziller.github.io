@@ -1,0 +1,231 @@
+---
+title: "Data Prepation, Visualisation and Statistics"
+output:
+  word_document: default
+  html_document:
+    df_print: paged
+params:
+  scheng: ~/Schengen_Permit_base.xlsx
+---
+
+## Determining the Schengen Area
+
+The first step for all data sets is to determine which values relate to countries afforded free movement across the German border and which do not.
+
+As the Schengen Area was implemented in Germany on 26 March 1995, and no data used preceeds this data, all citizens of all EU member states have the right of free movement across the German border regardless of if their respective country has implemented the Schengen area. As such, the Schengen Area status was determined using the Schengen area member list, the membership start date for EU states, and implementation date for non-EU state:
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(ggpubr)
+library(rstatix)
+library(readxl)
+require("lme4")
+require("emmeans")
+require("mgcv")
+require("fitdistrplus")
+require("DescTools")
+library(nortest)
+Schengen_permit <- read_xlsx(path = params$scheng)%>%
+  mutate(across(c("Male","Female", "Total"),as.integer)) %>% 
+  mutate(across(Date, as.Date)) %>%
+  mutate(across(c(Area,Citizenship), as.factor))
+```
+
+```{r schengen_setup, include=FALSE}
+schen_country_list <- c("Austria", "Belgium", "Bulgaria","Croatia","Czechia","Cyprus","Denmark","Estonia","Finland","France","Germany","Greece","Hungary","Iceland","Italy","Latvia","Liechtenstein","Lithuania","Luxembourg","Malta","Netherlands","Norway","Poland","Portugal","Romania","Slovakia","Slovenia","Spain","Sweden","Switzerland")
+schen_date_start <-as.Date(c("26-03-1995",	"26-03-1995",	"01-01-2007",	"01-07-2013",	"01-05-2004",	"01-05-2004",	"26-03-1995",	"01-05-2004",	"26-03-1995",	"26-03-1995",	"26-03-1995",	"26-03-1995",	"01-05-2004",	"25-03-2001",	"26-03-1995",	"01-05-2004",	"19-12-2011",	"01-05-2004",	"26-03-1995",	"01-05-2004",	"26-03-1995",	"25-03-2001",	"01-05-2004",	"26-03-1995",	"01-01-2007",	"01-05-2004",	"01-05-2004",	"26-03-1995",	"26-03-1995",	"12-12-2008"), "%d-%m-%Y")
+schen_country_date<-tibble(Country = schen_country_list,Date = as.Date(schen_date_start))
+```
+
+```{r schengen_print, echo=FALSE}
+knitr::kable(schen_country_date, n=30)
+```
+
+## Schengen Area Permit Comparison
+
+# Schengen Area Permit data Exploration
+
+
+```{r permit_data_import, results= "hide",warning=FALSE, eval= FALSE}
+Schengen_permit <- read_xlsx(path = "~/Schengen_Permit/12521-0008_en_country.xlsx",skip=5,col_names = c("Date","Citizenship","Permit","Male","Female")) %>% 
+  #Fills Date and Citizenship for merged cells
+  fill(Date,Citizenship) %>% 
+  mutate(across(c("Male","Female"),\(x) str_replace(x,"-","0"))) %>%
+  #Converts Male and Female from Character Columns to numeric columns and Date from Character to date.
+  mutate(across(c("Male","Female"),as.integer)) %>% 
+  mutate(across(Date, as.Date)) %>%
+  na.omit() %>%
+  #This section goes by row through the dataset and compares to the Schengen reference dataframe to determine if at that time the country was afforded free movement across the German border
+  rowwise() %>% mutate(Area = 
+                         case_when(
+                           any(Citizenship==schen_country_date$Country & Date>schen_country_date$Date) ~ "Schengen",
+                           .default = "Non-Schengen"
+                                      )
+  ) %>%
+  #Remove values that do not relate to a specific country
+  filter(!Citizenship %in% c("Unknown / Not specified","Stateless")) %>%
+  #Mutate Area and Citizenship Columns to factor for data analysis
+  mutate(across(c(Area,Citizenship), as.factor))%>%
+  #Create the Toatl Total column as the sum of Male and Female permit seekers
+  mutate(Total=rowSums(across(where(is.integer)))) 
+```
+
+## Data head, summary and Structure
+
+```{r Permit_Show_head, eval=FALSE, echo=TRUE}
+head(Schengen_permit) # first 6 observation
+```
+```{r Permit_tell_head,echo=FALSE,message=FALSE}
+knitr::kable(head(Schengen_permit))# first 6 observation
+```
+```{r Permit_Show_str, eval=FALSE, echo=TRUE}
+str(Schengen_permit) # structure of dataset
+```
+```{r Permit_tell_str,echo=FALSE,message=FALSE}
+tibble::glimpse(Schengen_permit)
+```
+```{r Permit_Show_sum, eval=FALSE, echo=TRUE}
+summary(Schengen_permit) # Summary overview of data
+```
+```{r Permit_tell_sum,echo=FALSE,message=FALSE}
+knitr::kable(summary(Schengen_permit)) #Summary overview of data
+```
+
+```{r create_visa_totals, include=FALSE}
+my_data_sum<- Schengen_permit %>% 
+  pivot_longer(!c(Date,Citizenship,Area,Permit), names_to = "Gender", values_to = "No_Visas")%>%
+  pivot_wider(names_from = Permit, values_from = No_Visas)%>%
+  rowwise() %>% mutate(Permit_Total=sum(across(where(is.numeric)),na.rm=TRUE)-`No res.title, temp.susp. of dep. or perm.to reside`)%>%
+  pivot_longer(!c(Date,Citizenship,Area,Gender),names_to = "Permit", values_to = "Permit_Count")%>%
+  pivot_wider(names_from = Gender, values_from = Permit_Count) %>%
+  replace(is.na(.), 0)
+```
+
+# Scatterplot of Permits
+
+```{r Scatter_permit, echo=FALSE, message=FALSE, fig.dim = c(6.4, 3), out.height="109%", out.width="109%",results='hide'}
+Zone_year_total <-my_data_sum %>%
+  group_by(Area,Date,Permit) %>%
+  summarise(Male=sum(Male),Female=sum(Female),Total=sum(Total))%>%
+  pivot_longer(!c(Date,Area,Permit), names_to = "Group", values_to = "Permit_Count")
+
+pmit<- unique(my_data_sum$Permit)
+
+pmit
+
+dens_fun1 <- function(perm) {
+  
+  ggplot(subset(Zone_year_total,Permit==perm),aes(x= Date, y=Permit_Count, colour=Group))+
+  geom_point(size=3)+
+  labs(title=paste(perm))+
+  ylab("Permit Count")+
+  xlab("Year")+
+  scale_x_date(date_breaks = "2 year",date_labels = "%Y")+
+  theme(plot.title = element_text(hjust = 0.5),
+        axis.text.x = element_text(angle = 45,  hjust=1),
+        legend.key.size = unit(0.3, 'cm'),
+        legend.key.height = unit(0.3, 'cm'),
+        legend.key.width = unit(0.3, 'cm'), 
+        legend.title = element_text(size=9), 
+        legend.text = element_text(size=7))+ 
+  facet_wrap(~Area)
+}
+
+map(pmit,\(x)dens_fun1(x))
+```
+
+# Boxplot of Permits
+
+```{r Box_perm, eval=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+my_data_sum %>%
+  group_nest(Permit)%>%
+  mutate(plot = map2(.x=.$data,.y=.$Permit,.f=~{ggplot(.x,aes(x= Area, y=Total, fill=Area))+   
+      geom_boxplot(outlier.shape = NA)+
+      scale_y_continuous(limits = quantile(.x$Total, c(0.1, 0.75)))+
+      labs(title=paste("Combined:\n",.y))+
+      theme(plot.title = element_text(hjust = 0.5))+
+    theme(plot.margin = unit(c(1,1,1,1), "cm"))}
+      ))%>%
+  walk(.x=.$plot, .f=~print(.x))
+my_data_sum %>%
+  group_nest(Permit)%>%
+  mutate(plot = map2(.x=.$data,.y=.$Permit,.f=~{ggplot(.x,aes(x= Area, y=Male, fill=Area))+   
+      geom_boxplot(outlier.shape = NA)+
+      scale_y_continuous(limits = quantile(.x$Male, c(0.1, 0.75)))+
+      labs(title=paste("Male:\n",.y))+
+      theme(plot.title = element_text(hjust = 0.5))+
+    theme(plot.margin = unit(c(1,1,1,1), "cm"))}
+      ))%>%
+  walk(.x=.$plot, .f=~print(.x))
+my_data_sum %>%
+  group_nest(Permit)%>%
+  mutate(plot = map2(.x=.$data,.y=.$Permit,.f=~{ggplot(.x,aes(x= Area, y=Female, fill=Area))+   
+      geom_boxplot(outlier.shape = NA)+
+      scale_y_continuous(limits = quantile(.x$Male, c(0.1, 0.75)))+
+      labs(title=paste("Female:\n",.y))+
+      theme(plot.title = element_text(hjust = 0.5))+
+    theme(plot.margin = unit(c(1,1,1,1), "cm"))}
+      ))%>%
+  walk(.x=.$plot, .f=~print(.x))
+
+```
+
+The initial visual review of the data show that most types of Permit are provided exclusively either Applicants from Schengen member states, or those from Non-member states. As such statistical analysis was conducted on the total permit count as comparing within permits when one group is always Zero offers no valuable insight
+
+
+# Analysis
+
+To compare the pattern of successful permits applications for applicants from Schengen vs Non-Schengen, the data were fitted to a linear mixed model. This allows for the Citizenship to included as a random variable, allowing the model to fit the other factors of the model by country.
+
+```{r warning=FALSE, include=FALSE}
+my_data_totals <- my_data_sum %>% 
+  dplyr::select(!c(Male,Female))%>%
+  filter(Total>0)
+Permit_totals <-my_data_totals %>%
+  filter(Permit=="Permit_Total")%>%
+  dplyr::select(!Permit)
+```
+
+The initial model fitted uses the permit totals as the dependent variable with Zone and Date as independent variables and Citizenship as the random variable.
+
+```{r echo=TRUE, warning=FALSE}
+Permit_model<- lmer(Total ~ Area + Date + (1|Citizenship), data = Permit_totals)
+```
+
+The residuals of this model were examined to make sure that they fulfilled the normality assumption. 
+
+```{r}
+descdist(residuals(Permit_model),discrete = FALSE)
+
+fit.norm <- fitdist(Permit_totals$Total+1, "norm")
+plot(fit.norm)
+summary(fit.norm)
+
+```
+
+We can see the distribution of the residuals is non-normal and have high degree of both kurtosis and skewness. In order to compensate for this log and log10 transformations of the data were tested
+
+```{r}
+Permit_model_log<- lmer(log(Total+1) ~ Area + Date + (1|Citizenship), data = Permit_totals)
+descdist(residuals(Permit_model_log),discrete = FALSE)
+
+fit.normlog <- fitdist(residuals(Permit_model_log), "norm")
+plot(fit.normlog)
+
+Permit_model_log10<- lmer(log10(Total+1) ~ Area + Date + (1|Citizenship), data = Permit_totals)
+descdist(residuals(Permit_model_log10),discrete = FALSE)
+
+fit.normlog10 <- fitdist(residuals(Permit_model_log10), "norm")
+plot(fit.normlog10)
+
+fit.normlog$aic
+fit.normlog10$aic
+```
+
+While this doesn't result in a normal distribution I was unable to identify distribution family that fit the data better. In an ideal situation the glm (generalised linear model)  or gam (general additive model) packages would be used with a most appropriate distribution family, but in this situation I used the log10 transformation as seemed this improved the distribution of the residuals with out overfitting.
+
+```{r}
+emmeans(Permit_model_log10, pairwise~Area,regrid="response",pbkrtest.limit = 5304,lmerTest.limit = 5304)
+```
+These results indicate that, while borderline there is no significant different in Successful permit application between Schengen and Non-schengen applicants.
+

@@ -1,0 +1,180 @@
+---
+title: "Schengen Unemployment"
+output:
+  word_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r schengen_setup, include=FALSE}
+library(tidyverse)
+library(readxl)
+library(ggpubr)
+library(rstatix)
+schen_country_list <- c("Austria", "Belgium", "Bulgaria","Croatia","Czechia","Cyprus","Denmark","Estonia","Finland","France","Germany","Greece","Hungary","Iceland","Italy","Latvia","Liechtenstein","Lithuania","Luxembourg","Malta","Netherlands","Norway","Poland","Portugal","Romania","Slovakia","Slovenia","Spain","Sweden","Switzerland")
+schen_date_start <-as.Date(c("26-03-1995",	"26-03-1995",	"01-01-2007",	"01-07-2013",	"01-05-2004",	"01-05-2004",	"26-03-1995",	"01-05-2004",	"26-03-1995",	"26-03-1995",	"26-03-1995",	"26-03-1995",	"01-05-2004",	"25-03-2001",	"26-03-1995",	"01-05-2004",	"19-12-2011",	"01-05-2004",	"26-03-1995",	"01-05-2004",	"26-03-1995",	"25-03-2001",	"01-05-2004",	"26-03-1995",	"01-01-2007",	"01-05-2004",	"01-05-2004",	"26-03-1995",	"26-03-1995",	"12-12-2008"), "%d-%m-%Y")
+schen_country_date<-tibble(Country = schen_country_list,Date = as.Date(schen_date_start))
+my_data <- read_xlsx(path = "~/Schengen_Unemployment/99911-0002_en.xlsx",skip=4,col_names = c("Country","Year","Labour_force",	"Labour_force_participation_rate",	"Rate_of_self-employed_persons",	"Unemployment_rate", "Long-term_unemployment_rate",	"Youth_unemployment_rate",	"Hourly_compensation_costs_in_manufacturing"))%>%
+  fill(Country) %>%
+  dplyr::select("Country","Year","Labour_force","Labour_force_participation_rate","Unemployment_rate")%>%
+  mutate(across(c("Labour_force_participation_rate","Unemployment_rate","Labour_force"),as.double))%>%
+  na.omit() %>%
+  rowwise() %>%mutate(Zone = 
+                        case_when(
+                          any(Country==schen_country_date$Country & as.numeric(Year) >= as.numeric(format(schen_country_date$Date,'%Y'))& Country!="Germany") ~ "Schengen",
+                          (Country=="Germany") ~ "Domestic",
+                          .default = "Non_Schengen"
+                        )
+  )%>%
+  mutate(across(c("Zone","Country"),as.factor))
+Mean_rates <- my_data %>%
+  group_by(Year,Zone) %>%
+  summarise(across(where(is.numeric),mean))
+```
+
+Schengen Area Unemployment Comparison
+
+```{r Permit_Show_head, eval=FALSE, echo=TRUE}
+head(my_data) # first 6 observation
+```
+```{r Permit_tell_head,echo=FALSE,message=FALSE}
+knitr::kable(head(my_data))# first 6 observation
+```
+```{r Permit_Show_str, eval=FALSE, echo=TRUE}
+str(my_data) # structure of dataset
+```
+```{r Permit_tell_str,echo=FALSE,message=FALSE}
+tibble::glimpse(my_data)
+```
+```{r Permit_Show_sum, eval=FALSE, echo=TRUE}
+summary(my_data) # Summary overview of data
+```
+```{r Permit_tell_sum,echo=FALSE,message=FALSE}
+knitr::kable(summary(my_data)) #Summary overview of data
+```
+```{r}
+UR_plot <- ggplot(Mean_rates, aes(x = Year, y = Unemployment_rate, colour = Zone )) +
+  geom_point(size = 2) +
+  theme(legend.position = "none",
+        axis.text.x = element_text(angle = 90,  hjust=1))+
+  facet_wrap(~Zone)
+UR_plot
+
+LP_plot <- ggplot(Mean_rates, aes(x = Year, y = Labour_force_participation_rate, colour = Zone )) +
+  geom_point(size = 2) +
+  theme(legend.position = "none",
+        axis.text.x = element_text(angle = 90,  hjust=1))+
+  facet_wrap(~Zone)
+  LP_plot
+
+```
+A visual examination of the data suggests that Mean Unemployment Rate and Labour force participation rate may track more closely to the Domestic (German national) rates. However this could be deceptive as there may more non-schengen states which could have a smoothing effect on the means plotted.
+
+# Analysis
+
+## Unemployment Rate
+
+### Group Summary Statistics
+
+```{r}
+my_data %>%
+  group_by(Zone)%>%
+  get_summary_stats(Unemployment_rate,type = "mean_sd")
+ggboxplot(my_data, x="Zone", y= "Unemployment_rate")
+```
+
+### Normality Assessment
+
+```{r}
+# Build the linear model
+model  <- lm(Unemployment_rate ~ Zone, data = my_data)
+# Create a QQ plot of residuals
+ggqqplot(residuals(model))
+```
+
+We can see from the qqplot that the model residuals are not normally distributed, and as such we use the Krushal-Wallis test going forwards, a non-parametric alternative the a one-way ANOVA.
+
+
+```{r}
+res.kruskal <- my_data %>% kruskal_test(Unemployment_rate ~ Zone)
+res.kruskal
+```
+
+```{r}
+ my_data %>% kruskal_effsize(Unemployment_rate ~ Zone)
+```
+
+
+
+```{r}
+# Pairwise comparisons
+pwc <- my_data %>% 
+  ungroup() %>%
+  dunn_test(Unemployment_rate ~ Zone, p.adjust.method = "bonferroni")
+pwc
+```
+
+```{r}
+pwc <- pwc %>% add_xy_position(x = "Zone")
+ggboxplot(my_data, x = "Zone", y = "Unemployment_rate") +
+  stat_pvalue_manual(pwc, hide.ns = TRUE) +
+  labs(
+    subtitle = get_test_label(res.kruskal, detailed = TRUE),
+    caption = get_pwc_label(pwc)
+    )
+```
+## Labour Force Partcipation Rate
+
+### Group Summary Statistics
+
+
+```{r}
+my_data %>%
+  group_by(Zone)%>%
+  get_summary_stats(Labour_force_participation_rate,type = "mean_sd")
+ggboxplot(my_data, x="Zone", y= "Unemployment_rate")
+```
+
+### Normality Assessment
+
+```{r}
+# Build the linear model
+model  <- lm(Labour_force_participation_rate ~ Zone, data = my_data)
+# Create a QQ plot of residuals
+ggqqplot(residuals(model))
+```
+
+We can see from the qqplot that the model residuals are not normally distributed, and as such we use the Krushal-Wallis test going forwards, a non-parametric alternative the a one-way ANOVA.
+
+
+```{r}
+res.kruskal<- my_data %>% kruskal_test(Labour_force_participation_rate ~ Zone)
+res.kruskal
+```
+
+```{r}
+ my_data %>% kruskal_effsize(Labour_force_participation_rate ~ Zone)
+```
+
+
+
+```{r}
+# Pairwise comparisons
+pwc <- my_data %>% 
+  ungroup() %>%
+  dunn_test(Labour_force_participation_rate ~ Zone, p.adjust.method = "bonferroni")
+pwc
+```
+```{r}
+pwc <- pwc %>% add_xy_position(x = "Zone")
+ggboxplot(my_data, x = "Zone", y = "Labour_force_participation_rate") +
+  stat_pvalue_manual(pwc, hide.ns = TRUE) +
+  labs(
+    subtitle = get_test_label(res.kruskal, detailed = TRUE),
+    caption = get_pwc_label(pwc)
+    )
+```

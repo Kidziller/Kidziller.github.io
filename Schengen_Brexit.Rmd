@@ -1,0 +1,390 @@
+---
+title: "Schengen Brexit comparison"
+output:
+  pdf_document: default
+  word_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r include = FALSE}
+require("tidyverse")
+require("readxl")
+require("emmeans")
+require("fitdistrplus")
+require("DescTools")
+
+schen_country_list <- c("Austria", "Belgium", "Bulgaria","Croatia","Czechia","Cyprus","Denmark","Estonia","Finland","France","Germany","Greece","Hungary","Iceland","Italy","Latvia","Liechtenstein","Lithuania","Luxembourg","Malta","Netherlands","Norway","Poland","Portugal","Romania","Slovakia","Slovenia","Spain","Sweden","Switzerland")
+schen_date_start <-as.Date(c("26-03-1995",	"26-03-1995",	"01-01-2007",	"01-07-2013",	"01-05-2004",	"01-05-2004",	"26-03-1995",	"01-05-2004",	"26-03-1995",	"26-03-1995",	"26-03-1995",	"26-03-1995",	"01-05-2004",	"25-03-2001",	"26-03-1995",	"01-05-2004",	"19-12-2011",	"01-05-2004",	"26-03-1995",	"01-05-2004",	"26-03-1995",	"25-03-2001",	"01-05-2004",	"26-03-1995",	"01-01-2007",	"01-05-2004",	"01-05-2004",	"26-03-1995",	"26-03-1995",	"12-12-2008"), "%d-%m-%Y")
+schen_country_date<-tibble(Country = schen_country_list,Date = as.Date(schen_date_start))
+
+Schengen_Brexit <- read_xlsx(path = "~/Schengen Brexit/germany_allnations.xlsx",skip=6, col_names = c("Year","Country","German_Arrivals_from_foreign_countries",	"German_Departures_to_foreign_countries",	"German_Migration_balance",	"Foreign_Arrivals_from_foreign_countries",	"Foreign_Departures_to_foreign_countries",	"Foreign_Migration_balance",	"Total_Arrivals_from_foreign_countries",	"Total_Departures_to_foreign_countries",	"Total_Migration_balance")) %>% 
+  fill(Year) %>%
+  filter(!Country %in% c("Rest of Africa","Rest of America","Rest of Asia","Rest of Europe","Rest of Oceania","Total","Unknown / Not specified","Unknown foreign countries"))%>%
+  mutate(across(c(3:11),as.integer))%>%
+  na.omit() %>%
+  rowwise() %>% mutate(Brexit = 
+                                      case_when(
+                                        as.numeric(Year) >2019 ~ "Post",
+                                        .default = "Pre"
+                                      )
+  )%>%
+  rowwise() %>%mutate(Zone = 
+                case_when(
+                  any(Country==schen_country_date$Country & as.numeric(Year) >= as.numeric(format(schen_country_date$Date,'%Y'))) ~ "Schengen",
+                  .default = "Non-Schengen"
+                )
+                )
+Schengen_Brexit_long <- Schengen_Brexit %>%
+  pivot_longer(!c(Year,Country,Brexit,Zone),names_to = "Direction", values_to = "Flow")
+Schengen_Brexit <- Schengen_Brexit %>%
+  ungroup()
+```
+
+## Schengen Brexit data Exploration
+
+Data head, summary and Structure
+
+```{r eval=FALSE, echo=TRUE}
+head(Schengen_Brexit)# first 6 observation
+```
+
+```{r echo=FALSE,message=FALSE}
+knitr::kable(head(Schengen_Brexit))
+```
+
+```{r eval=FALSE, echo=TRUE}
+str(Schengen_Brexit)# structure of dataset
+```
+
+```{r echo=FALSE,message=FALSE}
+tibble::glimpse(Schengen_Brexit)
+```
+
+```{r eval=FALSE, echo=TRUE}
+summary(Schengen_Brexit) #Summary overview of data
+```
+```{r Permit_tell_sum,echo=FALSE,message=FALSE}
+knitr::kable(summary(Schengen_Brexit)) #Summary overview of data
+```
+
+## Mirgration Overview
+
+In order to explore what effect the UK exit from the EU and thus the Schengen Area in 2020 on migration patterns we examined the movement of both foreign and German nationals across the German border pre and post Brexit. It is important to note that Brexit coincided with the Covid 19 pandemic which will have impact on migration patterns that are difficult to isolate.
+
+From an initial visual examination of the data there is a clear post Brexit spike in Foreign Arrivals, but no other obvious major shift in migration patterns.
+
+```{r echo=FALSE, message=FALSE}
+Schengen_Brexit_group <-Schengen_Brexit_long %>%
+  group_by(Year,Brexit,Zone,Direction)%>%
+  summarise(Overall=sum(Flow))
+
+Foreign_group <- Schengen_Brexit_group %>%
+  filter(Direction=="Foreign_Arrivals_from_foreign_countries"|Direction=="Foreign_Departures_to_foreign_countries"|Direction=="Foreign_Migration_balance")
+
+Foreign.labs <- unique(Foreign_group$Direction)
+Foreign.labs <- gsub("_", " ", Foreign.labs)
+names(Foreign.labs) <- unique(Foreign_group$Direction)
+Schengen.labs <- unique(Foreign_group$Zone)
+
+Foreign_plot<-ggplot(Foreign_group, aes(x=Year,y=Overall, colour = Brexit))+
+  geom_point(size=3)
+
+Foreign_plot+
+  facet_grid(
+    Zone~Direction,
+    labeller = labeller(Direction = Foreign.labs,
+                        .default=label_wrap_gen(25))
+             )+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        strip.text.x = element_text(size=7))
+
+German_group <- Schengen_Brexit_group %>%
+  filter(Direction=="German_Arrivals_from_foreign_countries"|Direction=="German_Departures_to_foreign_countries"|Direction=="German_Migration_balance")
+
+German.labs <- unique(German_group$Direction)
+German.labs <- gsub("_", " ", German.labs)
+names(German.labs) <- unique(German_group$Direction)
+
+German_plot<-ggplot(German_group, aes(x=Year,y=Overall, colour = Brexit))+
+  geom_point(size=3)
+
+German_plot+
+  facet_grid(
+    Zone~Direction,
+    labeller = labeller(Direction = German.labs,
+                        .default=label_wrap_gen(25))
+             )+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        strip.text.x = element_text(size=7))
+
+Total_group <- Schengen_Brexit_group %>%
+  filter(Direction=="Total_Arrivals_from_foreign_countries"|Direction=="Total_Departures_to_foreign_countries"|Direction=="Total_Migration_balance")
+
+Total.labs <- unique(Total_group$Direction)
+Total.labs <- gsub("_", " ", Total.labs)
+names(Total.labs) <- unique(Total_group$Direction)
+
+Total_plot<-ggplot(Total_group, aes(x=Year,y=Overall, colour = Brexit))+
+  geom_point(size=3)
+
+Total_plot+
+  facet_grid(
+    Zone~Direction,
+    labeller = labeller(Direction = Total.labs,
+                        .default=label_wrap_gen(25))
+             )+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        strip.text.x = element_text(size=7))
+```
+
+
+Delving further into the data we found that this spike is due to a huge influx from Ukraine, a consequence of the Ukraine War. 
+
+```{r echo=FALSE, message=FALSE}
+Ukraine_data<- Schengen_Brexit_long %>%
+  filter(Country=="Ukraine")
+
+Ukr.labs <- unique(Ukraine_data$Direction)
+Ukr.labs <- gsub("_", " ", Ukr.labs)
+names(Ukr.labs) <- unique(Ukraine_data$Direction)
+
+Overall_ukr_plot<-ggplot(Ukraine_data, aes(x=Year,y=Flow, colour = Brexit))+
+  geom_point(size=3)+
+  labs(title="Ukraine Migration")+
+  facet_wrap(~Direction,
+             labeller = labeller( 
+                                 Direction = Ukr.labs,
+                        .default=label_wrap_gen(25))
+             )+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+Overall_ukr_plot
+
+NU_Schengen_Brexit<- Schengen_Brexit_long %>%
+  filter(Country!="Ukraine")
+NU_Schengen_Brexit_group <-NU_Schengen_Brexit %>%
+  group_by(Year,Brexit,Zone,Direction)%>%
+  summarise(Overall=sum(Flow))
+
+NU_Foreign_group <- NU_Schengen_Brexit_group %>%
+  filter(Direction=="Foreign_Arrivals_from_foreign_countries"|Direction=="Foreign_Departures_to_foreign_countries"|Direction=="Foreign_Migration_balance")
+
+NU_S.labs<- unique(NU_Foreign_group$Direction)
+NU_S.labs <- gsub("_", " ", NU_S.labs)
+names(NU_S.labs) <- unique(NU_Foreign_group$Direction)
+
+Overall_NU_plot<-ggplot(NU_Foreign_group, aes(x=Year,y=Overall, colour = Brexit))+
+  geom_point(size=3)+
+  labs(title=paste("Foreign Migration without Ukraine"))+
+  facet_grid(Zone~Direction,
+             labeller = labeller( 
+                                 Direction = NU_S.labs,
+                        .default=label_wrap_gen(25))
+             )+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+Overall_NU_plot
+```
+
+Given the unique circumstances effecting migration from the Ukraine, that was excluded from the analysis of migration patterns below.
+
+## Statistical analysis
+```{r echo=FALSE}
+NUSchengen_Brexit<- Schengen_Brexit %>%
+  filter(Country!="Ukraine")
+```
+
+Our null hypothesis for this analysis was that there was no change to migration across the German border after the UK left the EU. In order to this we fitted to the migration data to a linear models for arrivals and departures for Foreign and German national.
+
+In the initial instance a basic model was constructed for each and the residuals tested for normality
+
+```{r}
+FA_brexit_model<- lm(Foreign_Arrivals_from_foreign_countries~ Country +Brexit + Zone , data = NUSchengen_Brexit)
+FD_brexit_model<- lm(Foreign_Departures_to_foreign_countries ~ Country +Brexit + Zone , data = NUSchengen_Brexit)
+GA_brexit_model<- lm(German_Arrivals_from_foreign_countries~ Country +Brexit + Zone , data = NUSchengen_Brexit)
+GD_brexit_model<- lm(German_Departures_to_foreign_countries ~ Country +Brexit + Zone , data = NUSchengen_Brexit)
+```
+
+### Foreign Arrivals model
+
+```{r echo=FALSE}
+descdist(residuals(FA_brexit_model),discrete = FALSE)
+fit.normfa <- fitdist(residuals(FA_brexit_model), "norm")
+plot(fit.normfa)
+```
+
+### Foreign Departures model
+
+```{r echo=FALSE}
+descdist(residuals(FD_brexit_model),discrete = FALSE)
+fit.normfd <- fitdist(residuals(FD_brexit_model), "norm")
+plot(fit.normfd)
+```
+
+### German Arrivals model
+
+```{r echo=FALSE}
+descdist(residuals(GA_brexit_model),discrete = FALSE)
+fit.normga <- fitdist(residuals(GA_brexit_model), "norm")
+plot(fit.normga)
+```
+
+### German Departures model
+
+```{r echo=FALSE}
+descdist(residuals(GD_brexit_model),discrete = FALSE)
+fit.normgd <- fitdist(residuals(GD_brexit_model), "norm")
+plot(fit.normgd)
+```
+
+We can see from all for this that the data are skewed and have a reasonable degree of kurtosis and would benefit from transformation. Log and log10 transformations were applied to each and the Akaike Information Criterion (AIC) used to determine the best fit Lower is better:
+
+
+
+```{r}
+FA_brexit_model_log<- lm(log(Foreign_Arrivals_from_foreign_countries+1)~ Country +Brexit + Zone , data = NUSchengen_Brexit)
+FA_brexit_model_log10<- lm(log10(Foreign_Arrivals_from_foreign_countries+1)~ Country +Brexit + Zone , data = NUSchengen_Brexit)
+```
+
+```{r echo=FALSE}
+descdist(residuals(FA_brexit_model_log),discrete = FALSE)
+fit.normfalog <- fitdist(residuals(FA_brexit_model_log), "norm")
+plot(fit.normfalog)
+descdist(residuals(FA_brexit_model_log10),discrete = FALSE)
+fit.normfalog10<- fitdist(residuals(FA_brexit_model_log10), "norm")
+plot(fit.normfalog10)
+```
+
+```{r}
+fit.normfa$aic
+fit.normfalog$aic
+fit.normfalog10$aic
+```
+
+```{r warning=FALSE}
+FD_brexit_model_log<- lm(log(Foreign_Departures_to_foreign_countries+1) ~ Country +Brexit + Zone , data = NUSchengen_Brexit)
+fit.normfdlog<- fitdist(residuals(FD_brexit_model_log), "norm")
+
+FD_brexit_model_log10<- lm(log10(Foreign_Departures_to_foreign_countries+1) ~ Country +Brexit + Zone , data = NUSchengen_Brexit)
+fit.normfdlog10<- fitdist(residuals(FD_brexit_model_log10), "norm")
+
+fit.normfd$aic
+fit.normfdlog$aic
+fit.normfdlog10$aic
+```
+
+```{r warning=FALSE}
+GA_brexit_model_log<- lm(log(German_Arrivals_from_foreign_countries+1)~ Country +Brexit + Zone , data = NUSchengen_Brexit)
+fit.normgalog<- fitdist(residuals(GA_brexit_model_log), "norm")
+
+GA_brexit_model_log10<- lm(log10(German_Arrivals_from_foreign_countries+1)~ Country +Brexit + Zone , data = NUSchengen_Brexit)
+fit.normgalog10<- fitdist(residuals(GA_brexit_model_log10), "norm")
+
+fit.normga$aic
+fit.normgalog$aic
+fit.normgalog10$aic
+```
+
+```{r warning=FALSE}
+GD_brexit_model_log<- lm(log(German_Departures_to_foreign_countries+1) ~ Country +Brexit + Zone , data = NUSchengen_Brexit)
+fit.normgdlog<- fitdist(residuals(GD_brexit_model_log), "norm")
+
+GD_brexit_model_log10<- lm(log10(German_Departures_to_foreign_countries+1) ~ Country +Brexit + Zone , data = NUSchengen_Brexit)
+fit.normgdlog10<- fitdist(residuals(GD_brexit_model_log10), "norm")
+
+fit.normgd$aic
+fit.normgdlog$aic
+fit.normgdlog10$aic
+
+```
+We can see all cases a log10 transformation improve the fit of the models residuals to a normal distribution.
+
+As we want examine the interation between Brexit and a countries migration patterns the interaction term "Brexit:Country" was added to the models.
+
+
+```{r warning=FALSE, message=FALSE}
+library(broom)
+FA_brexit_model_log10i<- lm(log10(Foreign_Arrivals_from_foreign_countries+1)~ Brexit + Zone + Country + Brexit:Country, data = NUSchengen_Brexit)
+anova(FA_brexit_model_log10i)
+
+FD_brexit_model_log10i<- lm(log10(Foreign_Departures_to_foreign_countries+1)~ Brexit + Zone + Country + Brexit:Country, data = NUSchengen_Brexit)
+anova(FD_brexit_model_log10i)
+
+GA_brexit_model_log10i<- lm(log10(German_Arrivals_from_foreign_countries+1)~ Brexit + Zone + Country + Brexit:Country, data = NUSchengen_Brexit)
+anova(GA_brexit_model_log10i)
+  
+GD_brexit_model_log10i<- lm(log10(German_Departures_to_foreign_countries+1)~ Brexit + Zone + Country + Brexit:Country, data = NUSchengen_Brexit)
+anova(GD_brexit_model_log10i)
+```
+Running an ANOVA test on each of the models we can see that there are significant effects for Zone, Country and the Brexit:Country interaction for all migration direction. 
+
+Post-hoc analysis was conducted using the Estimated marginal means package for the Pre-Post Brexit contrast by country. The results for countries that showed a significant difference in migration are displayed below
+
+## Foreign Arrivals from foreign countries
+
+```{r warning=FALSE, message=FALSE}
+FA.emm<-emmeans(FA_brexit_model_log10i,pairwise ~Brexit|Country,regrid="response" )
+contfa <- tidy(FA.emm$contrasts)
+subcontfa<-subset(contfa, contfa$adj.p.value<=0.05)
+sigfa<-unique(subcontfa$Country)
+emmfa <- tidy(FA.emm$emmeans)
+emmfa %>% filter(Country %in% sigfa)
+subcontfa
+
+dens_fun1 <- function(cntry, dir) {
+  
+  ggplot(subset(Schengen_Brexit_long,Country==cntry& Direction==dir),aes(x= Year, y=Flow, colour=Brexit))+
+    geom_point(size=3)+
+    labs(title=cntry)+
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+}
+
+map(sigfa,\(x)dens_fun1(x,"Foreign_Arrivals_from_foreign_countries"))
+```
+
+## Foreign Departures to foreign countries
+
+```{r warning=FALSE, message=FALSE}
+FD.emm<-emmeans(FD_brexit_model_log10i,pairwise ~Brexit|Country,regrid="response" )
+contfd <- tidy(FD.emm$contrasts)
+subcontfd<-subset(contfd, contfd$adj.p.value<=0.05)
+sigfd<-unique(subcontfd$Country)
+emmfd <- tidy(FD.emm$emmeans)
+emmfd %>% filter(Country %in% sigfd)
+subcontfd
+
+map(sigfd,\(x)dens_fun1(x,"Foreign_Departures_to_foreign_countries"))
+```
+
+## German Arrivals from foreign countries
+
+```{r warning=FALSE, message=FALSE}
+GA.emm<-emmeans(GA_brexit_model_log10i,pairwise ~Brexit|Country,regrid="response" )
+contga <- tidy(GA.emm$contrasts)
+subcontga<-subset(contga, contga$adj.p.value<=0.05)
+sigga<-unique(subcontga$Country)
+emmga <- tidy(GA.emm$emmeans)
+emmga %>% filter(Country %in% sigga)
+subcontga
+
+map(sigga,\(x)dens_fun1(x,"German_Arrivals_from_foreign_countries"))
+```
+
+## German Departures to foreign countries
+
+```{r warning=FALSE, message=FALSE}
+GD.emm<-emmeans(FA_brexit_model_log10i,pairwise ~Brexit|Country,regrid="response" )
+contgd <- tidy(GD.emm$contrasts)
+subcontgd<-subset(contgd, contgd$adj.p.value<=0.05)
+siggd<-unique(subcontgd$Country)
+emmgd <- tidy(GD.emm$emmeans)
+emmgd %>% filter(Country %in% siggd)
+subcontgd
+
+map(siggd,\(x)dens_fun1(x,"German_Departures_to_foreign_countries"))
+```
